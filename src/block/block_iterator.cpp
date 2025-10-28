@@ -19,6 +19,12 @@ BlockIterator::BlockIterator(std::shared_ptr<Block> b, const std::string &key,
     : block(b), tranc_id_(tranc_id), cached_value(std::nullopt) {
   // TODO: Lab3.2 创建迭代器时直接移动到指定的key位置
   // ? 你需要借助之前实现的 Block 类的成员函数
+  auto idx = block->get_idx_binary(key, tranc_id); // idx是offsets中的索引
+  if(idx.has_value()) {
+    this->current_index = idx.value();
+  } else {
+    this->current_index = this->block->offsets.size();  // 构造成end迭代器（因为end()函数用""来构造）
+  }
 }
 
 // BlockIterator::BlockIterator(std::shared_ptr<Block> b, uint64_t tranc_id)
@@ -29,30 +35,54 @@ BlockIterator::BlockIterator(std::shared_ptr<Block> b, const std::string &key,
 
 BlockIterator::pointer BlockIterator::operator->() const {
   // TODO: Lab3.2 -> 重载
+  this->cached_value = this->operator*();
+  if(this->cached_value.has_value()) {
+      return &(this->cached_value.value());
+  }
   return nullptr;
+  
 }
 
 BlockIterator &BlockIterator::operator++() {
   // TODO: Lab3.2 ++ 重载
   // ? 在后续的Lab实现事务后，你可能需要对这个函数进行返修
+  this->current_index++;
+  return *this;
+}
+
+BlockIterator &BlockIterator::operator--() {
+  // TODO: Lab3.2 自己增加的实现，主要为了Lab3.3
+  if(this->current_index==0) {
+    throw std::runtime_error("BlockIterator::operator--: Logic error");
+  }
+  this->current_index--;
   return *this;
 }
 
 bool BlockIterator::operator==(const BlockIterator &other) const {
   // TODO: Lab3.2 == 重载
-  return true;
+  if(this->current_index == other.current_index) {
+    return true;
+  }
+  return false;
 }
 
 bool BlockIterator::operator!=(const BlockIterator &other) const {
   // TODO: Lab3.2 != 重载
-  return true;
+  if(this->current_index != other.current_index) {
+    return true;
+  }
+  return false;
 }
 
 BlockIterator::value_type BlockIterator::operator*() const {
   // TODO: Lab3.2 * 重载
-  return {};
+  size_t offset = this->block->offsets[this->current_index];
+  auto entry = this->block->get_entry_at(offset);
+  return {entry.key, entry.value};
 }
 
+// 可以通过这个确认current_index就是offsets中的索引
 bool BlockIterator::is_end() { return current_index == block->offsets.size(); }
 
 void BlockIterator::update_current() const {

@@ -61,7 +61,7 @@ class HeapIterator : public BaseIterator {
 
 public:
   HeapIterator() = default;
-  HeapIterator(std::vector<SearchItem> item_vec, uint64_t max_tranc_id);
+  HeapIterator(std::vector<SearchItem> item_vec, uint64_t max_tranc_id);  // ? 为什么不是传引用？
   pointer operator->() const;
   virtual value_type operator*() const override;
   BaseIterator &operator++() override;

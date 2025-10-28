@@ -31,6 +31,7 @@ public:
   // 迭代器操作
   pointer operator->() const;
   BlockIterator &operator++();
+  BlockIterator &operator--();
   BlockIterator operator++(int) = delete;
   bool operator==(const BlockIterator &other) const;
   bool operator!=(const BlockIterator &other) const;

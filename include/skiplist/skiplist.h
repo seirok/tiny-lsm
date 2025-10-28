@@ -24,11 +24,13 @@ struct SkipListNode {
   std::vector<std::shared_ptr<SkipListNode>>
       forward_; // 指向不同层级的下一个节点的指针数组
   std::vector<std::weak_ptr<SkipListNode>>
-      backward_; // 指向不同层级的下一个节点的指针数组
+      backward_; // 指向不同层级的上一个节点的指针数组
+
   SkipListNode(const std::string &k, const std::string &v, int level,
                uint64_t tranc_id)
       : key_(k), value_(v), forward_(level, nullptr),
         backward_(level, std::weak_ptr<SkipListNode>()), tranc_id_(tranc_id) {}
+        
   void set_backward(int level, std::shared_ptr<SkipListNode> node) {
     backward_[level] = std::weak_ptr<SkipListNode>(node);
   }
@@ -119,6 +121,7 @@ public:
 
   // 插入或更新键值对
   // 这里不对 tranc_id 进行检查，由上层保证 tranc_id 的合法性
+  std::shared_ptr<SkipListNode> findGreaterOrEqual(const std::string& , uint64_t, std::vector<std::shared_ptr<SkipListNode>>&);
   void put(const std::string &key, const std::string &value, uint64_t tranc_id);
 
   // 查找键对应的值

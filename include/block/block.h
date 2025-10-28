@@ -35,7 +35,7 @@ class Block : public std::enable_shared_from_this<Block> {
 private:
   std::vector<uint8_t> data;
   std::vector<uint16_t> offsets;
-  size_t capacity;
+  size_t capacity; // Block 的容量阈值
 
   struct Entry {
     std::string key;

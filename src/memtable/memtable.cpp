@@ -12,6 +12,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <sys/types.h>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -28,11 +29,18 @@ MemTable::~MemTable() = default;
 void MemTable::put_(const std::string &key, const std::string &value,
                     uint64_t tranc_id) {
   // TODO: Lab2.1 无锁版本的 put
+  current_table->put(key, value, tranc_id);
+  return;
 }
 
 void MemTable::put(const std::string &key, const std::string &value,
                    uint64_t tranc_id) {
   // TODO: Lab2.1 有锁版本的 put
+  {
+    std::unique_lock<std::shared_mutex> lock(this->cur_mtx);
+    this->current_table->put(key, value, tranc_id);
+  }
+  return;
 }
 
 void MemTable::put_batch(
@@ -40,12 +48,22 @@ void MemTable::put_batch(
     uint64_t tranc_id) {
   // TODO: Lab2.1 有锁版本的 put_batch
   // ? tranc_id 参数可暂时忽略其逻辑判断, 直接插入即可
+  {
+    std::unique_lock<std::shared_mutex> lock(this->cur_mtx);
+    for (const auto &kv : kvs) {
+      this->current_table->put(kv.first, kv.second, tranc_id);
+    }
+  }
+  return;
 }
 
 SkipListIterator MemTable::cur_get_(const std::string &key, uint64_t tranc_id) {
   // 检查当前活跃的memtable
   // TODO: Lab2.1 从活跃跳表中查询
-  return SkipListIterator{};
+  if (!this->current_table) { // 活跃表为空
+    return SkipListIterator{};
+  }
+  return this->current_table->get(key, tranc_id);
 }
 
 SkipListIterator MemTable::frozen_get_(const std::string &key,
@@ -53,26 +71,41 @@ SkipListIterator MemTable::frozen_get_(const std::string &key,
   // TODO: Lab2.1 从冻结跳表中查询
   // ? 你需要尤其注意跳表的遍历顺序
   // ? tranc_id 参数可暂时忽略, 直接传递参数即可
+  for (const auto &sk : this->frozen_tables) {
+    auto result = sk->get(key, tranc_id);
+    if (result.is_valid()) {
+      return result;
+    }
+  }
   return SkipListIterator{};
 }
 
 SkipListIterator MemTable::get(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab2.1 查询, 建议复用 cur_get_ 和 frozen_get_
   // ? 注意并发控制
-
-  return SkipListIterator{};
+  {
+    std::shared_lock<std::shared_mutex> lock(cur_mtx);
+    auto result = this->cur_get_(key, tranc_id);
+    if (result.is_valid())
+      return result;
+  }
+  {
+    std::shared_lock<std::shared_mutex> lock(frozen_mtx);
+    auto result = this->frozen_get_(key, tranc_id);
+    return result;
+  }
 }
 
 SkipListIterator MemTable::get_(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab2.1 查询, 无锁版本
-  return SkipListIterator{};
+  return this->current_table->get(key, tranc_id);
 }
 
 std::vector<
     std::pair<std::string, std::optional<std::pair<std::string, uint64_t>>>>
 MemTable::get_batch(const std::vector<std::string> &keys, uint64_t tranc_id) {
-  spdlog::trace("MemTable--get_batch with {} keys", keys.size());
 
+  spdlog::trace("MemTable--get_batch with {} keys", keys.size());
   std::vector<
       std::pair<std::string, std::optional<std::pair<std::string, uint64_t>>>>
       results;
@@ -108,7 +141,7 @@ MemTable::get_batch(const std::vector<std::string> &keys, uint64_t tranc_id) {
     return results;
   }
 
-  slock1.unlock();                                        // 释放活跃表的锁
+  slock1.unlock(); // 释放活跃表的锁
   std::shared_lock<std::shared_mutex> slock2(frozen_mtx); // 获取冻结表的锁
   for (size_t idx = 0; idx < keys.size(); idx++) {
     if (results[idx].second.has_value()) {
@@ -138,15 +171,29 @@ MemTable::get_batch(const std::vector<std::string> &keys, uint64_t tranc_id) {
 
 void MemTable::remove_(const std::string &key, uint64_t tranc_id) {
   // TODO Lab2.1 无锁版本的remove
+  this->current_table->put(key, "", tranc_id);
+  return;
 }
 
 void MemTable::remove(const std::string &key, uint64_t tranc_id) {
   // TODO Lab2.1 有锁版本的remove
+  {
+    std::unique_lock<std::shared_mutex> lock(this->cur_mtx);
+    this->current_table->put(key, "", tranc_id);
+  }
+  return;
 }
 
 void MemTable::remove_batch(const std::vector<std::string> &keys,
                             uint64_t tranc_id) {
   // TODO Lab2.1 有锁版本的remove_batch
+  {
+    std::unique_lock<std::shared_mutex> lock(this->cur_mtx);
+    for (const auto &key : keys) {
+      this->current_table->put(key, "", tranc_id);
+    }
+  }
+  return;
 }
 
 void MemTable::clear() {
@@ -208,10 +255,19 @@ MemTable::flush_last(SSTBuilder &builder, std::string &sst_path, size_t sst_id,
 
 void MemTable::frozen_cur_table_() {
   // TODO: 冻结活跃表
+  frozen_bytes += current_table->get_size();
+  frozen_tables.push_front(std::move(this->current_table));
+  this->current_table = std::make_shared<SkipList>();
 }
 
 void MemTable::frozen_cur_table() {
   // TODO: 冻结活跃表, 有锁版本
+  {
+    std::shared_lock<std::shared_mutex> lock(this->frozen_mtx);
+    frozen_bytes += current_table->get_size();
+    frozen_tables.push_front(std::move(this->current_table));
+    this->current_table = std::make_shared<SkipList>();
+  }
 }
 
 size_t MemTable::get_cur_size() {
@@ -232,7 +288,21 @@ size_t MemTable::get_total_size() {
 
 HeapIterator MemTable::begin(uint64_t tranc_id) {
   // TODO Lab 2.2 MemTable 的迭代器
-  return {};
+  // 遍历skiplist构建vector<SearchItem>
+  std::vector<SearchItem> vec;
+  for (auto it = current_table->begin(); it != current_table->end(); ++it) {
+    vec.push_back(SearchItem(it.get_key(), it.get_value(), 0, 0, tranc_id));
+  } // 添加活跃表
+  int idx = 1;
+  for (auto it = this->frozen_tables.begin(); it != frozen_tables.end();
+       ++it) { // 添加冷冻表
+    for (auto it_ = (*it)->begin(); it_ != (*it)->end(); ++it_) {
+      vec.push_back(
+          SearchItem(it_.get_key(), it_.get_value(), idx, 0, tranc_id));
+    }
+    ++idx;
+  }
+  return HeapIterator(vec, 0);
 }
 
 HeapIterator MemTable::end() {
@@ -244,14 +314,64 @@ HeapIterator MemTable::iters_preffix(const std::string &preffix,
                                      uint64_t tranc_id) {
 
   // TODO Lab 2.3 MemTable 的前缀迭代器
+  // preffix: abc str: ab, abe, abcd
+  auto res = iters_monotony_predicate(tranc_id, [&](const std::string &str) {
+    if (str < preffix)
+      return 1;
+    if (str.size() >= preffix.size() &&
+        str.substr(0, preffix.size()) == preffix) {
+      return 0;
+    } else {
+      return -1;
+    }
+  });
 
-  return {};
+  if (res.has_value()) {
+    return res.value().first;
+  }
+  return HeapIterator{};
 }
 
 std::optional<std::pair<HeapIterator, HeapIterator>>
 MemTable::iters_monotony_predicate(
     uint64_t tranc_id, std::function<int(const std::string &)> predicate) {
   // TODO Lab 2.3 MemTable 的谓词查询迭代器起始范围
-  return std::nullopt;
-}
+  // (a1, b1)  (a2, b2) ...
+  std::shared_lock<std::shared_mutex> slock1(this->frozen_mtx);
+  std::shared_lock<std::shared_mutex> slock2(this->cur_mtx);
+  std::vector<SearchItem> item_vec; // SearchItem(std::string k, std::string v,
+                                    // int i, int l, uint64_t tranc_id)
+  // current_table 的谓词查询结果
+  auto result = this->current_table->iters_monotony_predicate(predicate);
+  if (result.has_value()) {
+    auto [begin, end] = result.value();
+    for (auto it = begin; it != end; ++it) {
+      item_vec.push_back(SearchItem(it.get_key(), it.get_value(), 0, 0, 0));
+    }
+  }
+
+  // frozen_tables 的谓词查询结果， 所有的结果项都加入到Heap中
+  int table_idx = 1;
+  for (auto it_table = this->frozen_tables.begin();
+       it_table != this->frozen_tables.end(); ++it_table) {
+    auto table = *it_table;
+    auto result = table->iters_monotony_predicate(predicate);
+    if (result.has_value()) {
+      auto [begin, end] = result.value();
+      for (auto it = begin; it != end; ++it) {
+        item_vec.push_back(
+            SearchItem(it.get_key(), it.get_value(), table_idx, 0, 0));
+      }
+    }
+    table_idx++;
+  }
+  if (item_vec.empty()) {
+    return std::nullopt;
+  }
+  auto head = HeapIterator(item_vec, 0);
+  auto tail =
+      HeapIterator{}; // auto [begin, end] = iters_monotony_predicate(pred);
+                      // for(auto it=begin;!it->is_end();++it) it->is_end():
+  return std::make_pair(head, tail);
+} // namespace tiny_lsm
 } // namespace tiny_lsm
