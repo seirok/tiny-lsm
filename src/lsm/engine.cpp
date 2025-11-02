@@ -55,6 +55,8 @@ uint64_t LSMEngine::put(const std::string &key, const std::string &value,
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
+  memtable.put(key, value, tranc_id);
+
   return 0;
 }
 
@@ -110,7 +112,11 @@ void LSMEngine::clear() {
 
 uint64_t LSMEngine::flush() {
   // TODO: Lab 4.1 刷盘形成sst文件
-  return 0;
+  size_t new_sst_id = next_sst_id++;
+
+  SSTBuilder sst_builder(TomlConfig::getInstance().getLsmBlockSize(), false);
+  auto path = get_sst_path(new_sst_id, 0);
+  this->memtable.flush_last(sst_builder, path, new_sst_id, this->block_cache);
 }
 
 std::string LSMEngine::get_sst_path(size_t sst_id, size_t target_level) {
