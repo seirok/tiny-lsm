@@ -92,7 +92,7 @@ int SkipList::random_level() {
   // TODO: Lab1.1 任务：插入时随机为这一次操作确定其最高连接的链表层数
   const int kBranch = 2;
   int level = 1;
-  while (!std::rand() % kBranch && level < max_level) {
+  while (std::rand() % kBranch == 0 && level < max_level) {
     level++;
   }
   return level;
@@ -307,15 +307,13 @@ SkipListIterator SkipList::end_preffix(const std::string &prefix) {
 
 // ? 这里单调谓词的含义是, 整个数据库只会有一段连续区间满足此谓词
 // ? 例如之前特化的前缀查询，以及后续可能的范围查询，都可以转化为谓词查询
-// ? 返回第一个满足谓词的位置和最后一个满足谓词的下一个位置的迭代器: [left, right) 
-// ? 如果不存在, 范围nullptr
-// ? 谓词作用于key, 且需要保证满足谓词的结果只在一段连续的区间内, 例如前缀匹配的谓词
-// ? 谓词对应于区间，谓词决定了哪些term是在区间内的，哪些是在区间左边/右边的
-// ? predicate返回值:
-// ?   0: 满足谓词
-// ?   >0: 不满足谓词, 需要向右移动
-// ?   <0: 不满足谓词, 需要向左移动
-// ! Skiplist 中的谓词查询不会进行事务id的判断, 需要上层自己进行判断
+// ? 返回第一个满足谓词的位置和最后一个满足谓词的下一个位置的迭代器: [left,
+// right) ? 如果不存在, 范围nullptr ? 谓词作用于key,
+// 且需要保证满足谓词的结果只在一段连续的区间内, 例如前缀匹配的谓词 ?
+// 谓词对应于区间，谓词决定了哪些term是在区间内的，哪些是在区间左边/右边的 ?
+// predicate返回值: ?   0: 满足谓词 ?   >0: 不满足谓词, 需要向右移动 ?   <0:
+// 不满足谓词, 需要向左移动 ! Skiplist 中的谓词查询不会进行事务id的判断,
+// 需要上层自己进行判断
 
 std::optional<std::pair<SkipListIterator, SkipListIterator>>
 SkipList::iters_monotony_predicate(
