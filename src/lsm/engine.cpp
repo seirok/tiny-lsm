@@ -8,6 +8,7 @@
 #include "../../include/sst/sst_iterator.h"
 #include "spdlog/spdlog.h"
 #include <algorithm>
+#include <bits/stdint-uintn.h>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -31,6 +32,18 @@ LSMEngine::~LSMEngine() = default;
 std::optional<std::pair<std::string, uint64_t>>
 LSMEngine::get(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab 4.2 查询
+  auto sk_iter = memtable.get(key, tranc_id);
+  if (sk_iter.is_valid()) {
+    const auto &value = sk_iter.get_value();
+    if (value == "") {
+      return std::nullopt;
+    } else {
+      std::pair<std::string, uint64_t> res{value, sk_iter.get_tranc_id()};
+      return res;
+    }
+  } else {
+    return std::nullopt;
+  }
 
   return std::nullopt;
 }
@@ -56,6 +69,11 @@ uint64_t LSMEngine::put(const std::string &key, const std::string &value,
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
   memtable.put(key, value, tranc_id);
+  if (memtable.get_total_size() >=
+      TomlConfig::getInstance().getLsmTolMemSizeLimit()) {
+    auto new_sst_id = this->flush();
+    return new_sst_id;
+  }
 
   return 0;
 }
@@ -75,6 +93,12 @@ uint64_t LSMEngine::remove(const std::string &key, uint64_t tranc_id) {
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
+  memtable.put(key, "", tranc_id);
+  if (memtable.get_total_size() >=
+      TomlConfig::getInstance().getLsmTolMemSizeLimit()) {
+    auto new_sst_id = this->flush();
+    return new_sst_id;
+  }
   return 0;
 }
 
@@ -85,7 +109,11 @@ uint64_t LSMEngine::remove_batch(const std::vector<std::string> &keys,
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
-  return 0;
+  uint64_t sst_id = 0;
+  for (const auto &key : keys) {
+    sst_id = remove(key, tranc_id);
+  }
+  return sst_id;
 }
 
 void LSMEngine::clear() {
@@ -116,7 +144,10 @@ uint64_t LSMEngine::flush() {
 
   SSTBuilder sst_builder(TomlConfig::getInstance().getLsmBlockSize(), false);
   auto path = get_sst_path(new_sst_id, 0);
-  this->memtable.flush_last(sst_builder, path, new_sst_id, this->block_cache);
+  auto sst = this->memtable.flush_last(sst_builder, path, new_sst_id,
+                                       this->block_cache);
+  this->ssts[new_sst_id] = sst;
+  return new_sst_id;
 }
 
 std::string LSMEngine::get_sst_path(size_t sst_id, size_t target_level) {
