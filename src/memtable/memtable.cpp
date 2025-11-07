@@ -196,7 +196,24 @@ void MemTable::clear() {
   current_table->clear();
 }
 
-// 将最老的 memtable 写入 SST, 并返回控制类
+/**
+ * @brief 将最老的冻结内存表刷新到磁盘上的SST文件
+ *
+ * 该函数负责将内存中最老的冻结内存表（SkipList）数据刷新到磁盘，生成SST文件。
+ * 如果当前没有冻结表但当前表非空，会先将当前表冻结再处理。
+ * 刷新过程中会收集事务ID信息，并更新相关统计。
+ *
+ * @param builder SST构建器，用于构建SST文件
+ * @param sst_path 生成的SST文件路径
+ * @param sst_id SST文件的唯一标识符
+ * @param flushed_tranc_ids 输出参数，存储被刷新的事务ID列表
+ * @param block_cache 块缓存，用于SST文件构建
+ * @return std::shared_ptr<SST> 成功返回指向新SST文件的智能指针，失败返回nullptr
+ *
+ * @note 该操作需要获取写锁，因为会修改冻结表列表
+ * @note 如果当前表和冻结表都为空，则直接返回nullptr
+ * @note 刷新后会从冻结表列表中移除最老的表
+ */
 std::shared_ptr<SST>
 MemTable::flush_last(SSTBuilder &builder, std::string &sst_path, size_t sst_id,
                      std::shared_ptr<BlockCache> block_cache) {

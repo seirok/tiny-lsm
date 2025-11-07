@@ -162,9 +162,7 @@ std::string Block::get_value_at(size_t offset) const {
   auto res =
       std::string(this->data.begin() + offset + 2 + key_len + 2,
                   this->data.begin() + offset + 2 + key_len + 2 + val_len);
-  if (res == "") {
-    std::cout << "Block::get_value_at: Empty String" << std::endl;
-  }
+
   return res;
 }
 

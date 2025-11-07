@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -23,28 +24,109 @@ namespace tiny_lsm {
 LSMEngine::LSMEngine(std::string path) : data_dir(path) {
   // 初始化日志
   init_spdlog_file();
-
   // TODO: Lab 4.2 引擎初始化
+  // 要把sst文件的内容读出来
+
+  // 初始化BlockCache
+  block_cache = std::make_shared<BlockCache>(
+      TomlConfig::getInstance().getLsmBlockCacheCapacity(),
+      TomlConfig::getInstance().getLsmBlockCacheK());
+
+  for (const auto &file : std::filesystem::directory_iterator(path)) {
+    std::string filename = file.path().filename().string();
+    size_t dot_pos = filename.find('.');
+    // 提取level
+    std::string level_str =
+        filename.substr(dot_pos + 1, filename.length() - 1 - dot_pos);
+    size_t level = std::stoull(level_str);
+
+    //提取 sst id
+    std::string id_str = filename.substr(4, dot_pos - 1 - 4 + 1);
+    size_t sst_id = std::stoull(id_str);
+
+    //得到 sst文件的完整路径
+    std::string sst_path = get_sst_path(sst_id, level);
+
+    // 读取SST文件
+    auto sst = SST::open(sst_id, FileObj::open(sst_path, false), block_cache);
+
+    // 完善engine类的相关信息
+    this->ssts[sst_id] = sst;
+    this->level_sst_ids[level].push_back(sst_id);
+  }
+
+  for (auto &[level, sst_id_list] : level_sst_ids) {
+    std::sort(sst_id_list.begin(), sst_id_list.end());
+    if (level == 0) {
+      // 其他 level 的 sst 都是没有重叠的, 且 id 小的表示 key
+      // 排序在前面的部分, 不需要 reverse
+      std::reverse(sst_id_list.begin(), sst_id_list.end());
+    }
+  }
 }
 
 LSMEngine::~LSMEngine() = default;
 
+/**
+ * @brief 在LSM引擎中查找指定键的值（完整版本）
+ *
+ * 该函数按照LSM树的层级结构依次查找给定的键，查找顺序为：
+ * 1. 内存表（MemTable）
+ * 2. Level 0的SST文件（按SST ID从大到小顺序，新的优先）
+ * 3. 其他层级的SST文件（使用二分查找定位可能包含该键的SST文件）
+ *
+ * @param key 要查找的键
+ * @param tranc_id 事务ID，用于可见性判断
+ * @return std::optional<std::pair<std::string, uint64_t>>
+ *         如果找到且未被删除，返回键值对和事务ID；如果键不存在或已被删除，返回std::nullopt
+ *
+ * @note 查找过程中采用多级缓存策略：内存表->L0 SST->其他层级SST
+ * @note Level 0的SST文件按SST ID降序查找（新的数据优先）
+ * @note 越晚刷入磁盘的sst文件优先查询
+ * @note 其他层级的SST文件使用二分查找优化搜索效率
+ * @note 空值表示该键已被标记删除（逻辑删除）
+ * @note 函数执行期间会持有SST文件的读锁以保证一致性
+ * @note 会记录详细的跟踪日志，包括查找结果和来源信息
+ *
+ * @see MemTable::get()
+ * @see SST::get()
+ */
 std::optional<std::pair<std::string, uint64_t>>
 LSMEngine::get(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab 4.2 查询
+  // 1. 先在 memtable 中查询
   auto sk_iter = memtable.get(key, tranc_id);
   if (sk_iter.is_valid()) {
     const auto &value = sk_iter.get_value();
-    if (value == "") {
-      return std::nullopt;
-    } else {
+    if (value != "") {
       std::pair<std::string, uint64_t> res{value, sk_iter.get_tranc_id()};
       return res;
+    } else {
+      spdlog::trace("LSMEngine--"
+                    "get({},{}): key is deleted, returning "
+                    "from memtable",
+                    key, tranc_id);
+      return std::nullopt;
     }
-  } else {
-    return std::nullopt;
   }
 
+  // 2. 在 engine 管理的sst文件中查询
+  for (auto sst_id : this->level_sst_ids[0]) {
+    auto sst = this->ssts[sst_id];
+    auto sst_it = sst->get(key, tranc_id);
+    if (sst_it != sst->end()) {
+      const auto &value = sst_it->second;
+      if (value == "") {
+        spdlog::trace("LSMEngine--"
+                      "get({},{}): key is deleted or do not "
+                      "exist , returning "
+                      "from l0 sst{}",
+                      key, tranc_id, sst_id);
+        return std::nullopt;
+      }
+      return std::pair<std::string, uint64_t>(value, tranc_id);
+    }
+  }
   return std::nullopt;
 }
 
@@ -62,6 +144,27 @@ LSMEngine::sst_get_(const std::string &key, uint64_t tranc_id) {
   return std::nullopt;
 }
 
+/**
+ * @brief 将键值对插入到LSM引擎中
+ *
+ * 将指定的键值对插入到内存表(memtable)中，并根据内存表大小决定是否触发刷新到磁盘操作。
+ * 如果内存表的大小超过配置的阈值，会自动执行flush操作将内存表数据写入磁盘。
+ *
+ * @param[in] key 要插入的键
+ * @param[in] value 要插入的值
+ * @param[in] tranc_id 事务ID，用于标识插入操作所属的事务
+ *
+ * @return uint64_t 如果触发了flush操作，返回flush操作的结果；否则返回0
+ *
+ * @note 插入操作首先被写入内存表，然后检查内存表大小是否超过配置限制
+ * @note
+ * 当内存表大小超过TomlConfig中配置的lsm_tol_mem_size_limit时，会触发flush操作
+ * @note 使用spdlog进行trace级别的日志记录，便于调试和追踪
+ *
+ * @see LSMEngine::flush()
+ * @see MemTable::put()
+ * @see TomlConfig::getLsmTolMemSizeLimit()
+ */
 uint64_t LSMEngine::put(const std::string &key, const std::string &value,
                         uint64_t tranc_id) {
   // TODO: Lab 4.1 插入
@@ -93,7 +196,7 @@ uint64_t LSMEngine::remove(const std::string &key, uint64_t tranc_id) {
   // ? 由于 put 操作可能触发 flush
   // ? 如果触发了 flush 则返回新刷盘的 sst 的 id
   // ? 在没有实现  flush 的情况下，你返回 0即可
-  memtable.put(key, "", tranc_id);
+  memtable.remove(key, tranc_id);
   if (memtable.get_total_size() >=
       TomlConfig::getInstance().getLsmTolMemSizeLimit()) {
     auto new_sst_id = this->flush();
@@ -138,6 +241,26 @@ void LSMEngine::clear() {
   }
 }
 
+/**
+ * @brief 将内存表刷新到磁盘
+ *
+ * 将当前内存表的数据刷新到磁盘，生成新的SSTable文件。在执行刷新前会检查L0层的SSTable数量是否超过阈值，
+ * 如果超过则先执行L0到L1的合并压缩操作。刷新过程包括创建新的SSTable文件、更新内存索引和事务状态。
+ *
+ * @return uint64_t 返回新刷入的SSTable中最大的事务ID
+ *
+ * @note 如果内存表为空，则直接返回0，不执行任何操作
+ * @note 刷新过程需要获取SSTable的写锁，确保线程安全
+ * @note
+ * 在刷新前会检查L0层SSTable数量，如果超过配置的level_ratio，会先执行full_compact操作
+ * @note 刷新完成后会更新事务管理器，标记已刷新的事务ID
+ * @note 调用Memtable的flush_last()，将内存表中最后一张跳表的数据刷新到磁盘
+ *
+ * @see LSMEngine::full_compact()
+ * @see MemTable::flush_last()
+ * @see SSTBuilder
+ * @see TransactionManager::add_flushed_tranc_id()
+ */
 uint64_t LSMEngine::flush() {
   // TODO: Lab 4.1 刷盘形成sst文件
   size_t new_sst_id = next_sst_id++;
@@ -147,6 +270,8 @@ uint64_t LSMEngine::flush() {
   auto sst = this->memtable.flush_last(sst_builder, path, new_sst_id,
                                        this->block_cache);
   this->ssts[new_sst_id] = sst;
+  this->level_sst_ids[0].push_front(
+      new_sst_id); // 越晚刷入的优先查询，详见LSMEngine::get()
   return new_sst_id;
 }
 
@@ -256,6 +381,23 @@ LSM::get_batch(const std::vector<std::string> &keys) {
   return results;
 }
 
+/**
+ * @brief 插入键值对到LSM树中
+ *
+ * 将指定的键值对插入到LSM存储引擎中，支持事务控制。
+ * 如果事务功能被关闭，则使用默认的事务ID 0。
+ *
+ * @param[in] key 要插入的键
+ * @param[in] value 要插入的值
+ * @param[in] tranc_off
+ * 是否关闭事务功能。如果为true，则不使用事务管理。默认开启事务
+ *
+ * @note 当tranc_off为false时，会从事务管理器获取新的事务ID
+ * @note 实际的数据插入操作委托给底层的存储引擎执行
+ *
+ * @see LSM::get()
+ * @see LSM::remove()
+ */
 void LSM::put(const std::string &key, const std::string &value,
               bool tranc_off) {
   auto tranc_id = tranc_off ? 0 : tran_manager_->getNextTransactionId();

@@ -1,4 +1,5 @@
 #include "../../include/utils/std_file.h"
+#include <iostream>
 
 namespace tiny_lsm {
 
@@ -11,6 +12,7 @@ bool StdFile::open(const std::string &filename, bool create) {
   } else {
     file_.open(filename, std::ios::in | std::ios::out | std::ios::binary);
   }
+  std::cout << "Try to open file in path filename" << std::endl;
 
   return file_.is_open();
 }

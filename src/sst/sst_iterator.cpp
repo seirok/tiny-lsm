@@ -135,7 +135,7 @@ void SstIterator::seek_first() {
 
 void SstIterator::seek(const std::string &key) {
   // TODO: Lab 3.6 将迭代器定位到指定key的位置
-  size_t idx = this->m_sst->find_block_idx(key);
+  int idx = this->m_sst->find_block_idx(key);
   if (idx == -1) {
     m_block_it = nullptr;
     m_block_idx = m_sst->num_blocks();
@@ -144,7 +144,7 @@ void SstIterator::seek(const std::string &key) {
 
   m_block_idx = idx;
   auto block = m_sst->read_block(m_block_idx);
-  m_block_it = std::make_shared<BlockIterator>(block, idx, this->max_tranc_id_);
+  m_block_it = std::make_shared<BlockIterator>(block, key, this->max_tranc_id_);
 }
 
 std::string SstIterator::key() {

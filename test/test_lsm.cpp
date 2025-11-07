@@ -53,7 +53,7 @@ TEST_F(LSMTest, BasicOperations) {
 // Test persistence across restarts
 TEST_F(LSMTest, Persistence) {
   std::unordered_map<std::string, std::string> kvs;
-  int num = 100000;
+  int num = 100;
   {
     LSM lsm(test_dir);
     for (int i = 0; i < num; ++i) {

@@ -212,7 +212,19 @@ void SkipList::remove(const std::string &key) {
   }
 }
 
-// 刷盘时可以直接遍历最底层链表
+/**
+ * @brief 将跳表中的所有数据刷新到向量中
+ *
+ * 该函数遍历跳表中的所有节点，将每个节点的键、值和事务ID打包成元组，
+ * 并按照跳表的遍历顺序收集到向量中返回。
+ *
+ * @return std::vector<std::tuple<std::string, std::string, uint64_t>>
+ *         包含所有节点数据的向量，每个元素为(key, value, transaction_id)元组
+ *
+ * @note 该函数目前注释掉了共享锁和日志输出，需要时可以启用
+ * @note 遍历顺序为跳表最底层的链表顺序（即按键排序的顺序）
+ * @note 返回的数据可以用于后续的SST文件构建或其他持久化操作
+ */
 std::vector<std::tuple<std::string, std::string, uint64_t>> SkipList::flush() {
   // std::shared_lock<std::shared_mutex> slock(rw_mutex);
   // spdlog::debug("SkipList--flush(): Starting to flush skiplist data");

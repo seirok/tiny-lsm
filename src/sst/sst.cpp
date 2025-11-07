@@ -23,6 +23,9 @@ std::shared_ptr<SST> SST::open(size_t sst_id, FileObj file,
                                std::shared_ptr<BlockCache> block_cache) {
   // TODO Lab 3.6 打开一个SST文件, 返回一个描述类
   // SST最后4个字节用来存放Meta Section 的偏移
+  // sst 文件结构：
+  // | Block 1 | Block 2 |...| Block 5 | meta-section | meta-offset |
+
   auto sst = std::make_shared<SST>();
 
   // 从二进制数据中读取meta offset
@@ -92,7 +95,7 @@ std::shared_ptr<Block> SST::read_block(size_t block_idx) {
   return block_read;
 }
 
-size_t SST::find_block_idx(const std::string &key) {
+int SST::find_block_idx(const std::string &key) {
   // 先在布隆过滤器判断key是否存在
   // TODO: Lab 3.6 二分查找
   // ? 给定一个 `key`, 返回其所属的 `block` 的索引
@@ -118,7 +121,12 @@ size_t SST::find_block_idx(const std::string &key) {
 SstIterator SST::get(const std::string &key, uint64_t tranc_id) {
   // TODO: Lab 3.6 根据查询`key`返回一个迭代器
   // ? 如果`key`不存在, 返回一个无效的迭代器即可
-  throw std::runtime_error("Not implemented");
+  auto self = shared_from_this();
+  auto sst_it = SstIterator(self, tranc_id);
+  if (key < this->first_key || key > this->last_key) {
+    return this->end();
+  }
+  return SstIterator(shared_from_this(), key, tranc_id);
 }
 
 size_t SST::num_blocks() const { return meta_entries.size(); }
@@ -138,7 +146,9 @@ SstIterator SST::begin(uint64_t tranc_id) {
 
 SstIterator SST::end() {
   // TODO: Lab 3.6 返回终止位置迭代器
-  throw std::runtime_error("Not implemented");
+  auto sst_it = SstIterator(shared_from_this(), 0);
+  sst_it.m_block_it = nullptr;
+  return sst_it;
 }
 
 std::pair<uint64_t, uint64_t> SST::get_tranc_id_range() const {
