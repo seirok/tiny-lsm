@@ -242,7 +242,7 @@ void LSMEngine::clear() {
 }
 
 /**
- * @brief 将内存表刷新到磁盘
+ * @brief 将内存表中最后一张跳表的数据刷新到磁盘，形成新的sst文件
  *
  * 将当前内存表的数据刷新到磁盘，生成新的SSTable文件。在执行刷新前会检查L0层的SSTable数量是否超过阈值，
  * 如果超过则先执行L0到L1的合并压缩操作。刷新过程包括创建新的SSTable文件、更新内存索引和事务状态。
@@ -423,6 +423,22 @@ void LSM::clear() { engine->clear(); }
 
 void LSM::flush() { auto max_tranc_id = engine->flush(); }
 
+/**
+ * @brief 强制刷新所有内存表数据到磁盘
+ *
+ * 该函数循环检查内存表的总大小，只要内存表中还有数据就持续执行刷新操作。
+ * 每次刷新会将当前内存表中最后一张跳表的数据写入SST文件，并更新事务管理器中的最大已刷新事务ID。
+ *
+ * @note 该函数会阻塞直到所有内存表数据都被刷新到磁盘
+ * @note 适用于关闭数据库或执行检查点等需要持久化所有数据的场景
+ * @note 每次刷新后都会更新事务管理器的状态
+ * @note
+ * 通过LSM引擎写入的数据一部分持久化到了磁盘中，另一部分还在内存里(Memtable)
+ * @note 在LSM引擎析构时，需要将还未持久化的内存数据刷到磁盘里
+ *
+ * @see LSMEngine::flush()
+ * @see TransactionManager::update_max_flushed_tranc_id()
+ */
 void LSM::flush_all() {
   while (engine->memtable.get_total_size() > 0) {
     auto max_tranc_id = engine->flush();

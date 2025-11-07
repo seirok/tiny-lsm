@@ -39,6 +39,10 @@ void MemTable::put(const std::string &key, const std::string &value,
   {
     std::unique_lock<std::shared_mutex> lock(this->cur_mtx);
     this->current_table->put(key, value, tranc_id);
+    if (this->current_table->get_size() >
+        TomlConfig::getInstance().getLsmPerMemSizeLimit()) {
+      frozen_cur_table();
+    }
   }
   return;
 }

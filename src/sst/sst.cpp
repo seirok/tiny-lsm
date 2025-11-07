@@ -196,6 +196,20 @@ void SSTBuilder::add(const std::string &key, const std::string &value,
 
 size_t SSTBuilder::estimated_size() const { return data.size(); }
 
+/**
+ * @brief 完成当前块的构建并将其编码到数据缓冲区
+ *
+ * 该函数在检测到当前块容量超出阈值时被调用，负责将当前块的数据进行编码，
+ * 生成块元数据信息，并将编码后的块数据添加到总数据缓冲区中。
+ *
+ * @note 调用此函数后会清空当前块，为下一个块的构建做准备
+ * @note 会记录块的起始偏移量、第一个键和最后一个键作为元数据
+ * @note 编码后的块数据会被追加到数据缓冲区的末尾
+ * @note 使用移动语义来清空当前块，避免不必要的拷贝
+ *
+ * @see Block::encode()
+ * @see BlockMeta
+ */
 void SSTBuilder::finish_block() {
   // TODO: Lab 3.5 构建块
   // ? 当 add
@@ -212,6 +226,28 @@ void SSTBuilder::finish_block() {
   this->data.insert(this->data.end(), encoded_data.begin(), encoded_data.end());
 }
 
+/**
+ * @brief 构建SST文件并写入磁盘
+ *
+ * 该函数完成SST文件的最终构建，包括处理最后一个数据块、生成元数据段、
+ * 添加元数据偏移量，并将完整内容写入磁盘文件。最终返回指向新构建SST对象的共享指针。
+ *
+ * @param sst_id SST文件的唯一标识符
+ * @param path SST文件的存储路径
+ * @param block_cache 块缓存，用于SST对象的缓存管理
+ * @return std::shared_ptr<SST> 指向新构建SST对象的共享指针
+ *
+ * @throw std::runtime_error 如果SST构建器为空（没有数据）
+ *
+ * @note 文件格式：数据块1 + 数据块2 + ... + 元数据段 + 元数据偏移量(4字节)
+ * @note 会先完成最后一个块的构建，然后生成元数据段
+ * @note 元数据偏移量以小端字节序存储在文件末尾
+ * @note 构建完成后会创建对应的SST描述对象并返回
+ *
+ * @see SSTBuilder::finish_block()
+ * @see BlockMeta::encode_meta_to_slice()
+ * @see FileObj::create_and_write()
+ */
 std::shared_ptr<SST>
 SSTBuilder::build(size_t sst_id, const std::string &path,
                   std::shared_ptr<BlockCache> block_cache) {
@@ -219,10 +255,7 @@ SSTBuilder::build(size_t sst_id, const std::string &path,
   // SST = block1 + block2 + ... + meta section + meta-offset(4 bytes)
   // 构建完之后将SST写入文件里，该文件对象FileObj由SST类管理
 
-  size_t file_size = 1000;
-  // 此时，数据全部存在于SSTBuilder中的data
-  auto sst = SST::create_sst_with_meta_only(sst_id, file_size, this->first_key,
-                                            this->last_key, block_cache);
+  auto sst = std::make_shared<SST>();
   if (this->block.is_empty() && !this->meta_entries.size()) {
     throw std::runtime_error("SSTBuilder::build: Empty SST");
   }
@@ -233,7 +266,9 @@ SSTBuilder::build(size_t sst_id, const std::string &path,
   BlockMeta::encode_meta_to_slice(this->meta_entries, meta_section);
 
   std::vector<uint8_t> file_content = std::move(this->data);
+
   sst->meta_block_offset = file_content.size();
+
   file_content.insert(file_content.end(), meta_section.begin(),
                       meta_section.end());
 
@@ -252,6 +287,10 @@ SSTBuilder::build(size_t sst_id, const std::string &path,
   // 构建SST描述类
   sst->file = std::move(file);
   sst->meta_entries = this->meta_entries;
+  sst->sst_id = sst_id;
+  sst->first_key = this->first_key;
+  sst->last_key = this->last_key;
+
   return sst;
 }
 } // namespace tiny_lsm
