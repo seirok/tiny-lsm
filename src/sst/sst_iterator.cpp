@@ -236,6 +236,26 @@ void SstIterator::update_current() const {
   }
 }
 
+/**
+ * @brief 合并多个SST迭代器到一个堆迭代器
+ *
+ * 该函数将多个SST（Sorted String
+ * Table）迭代器合并为一个堆迭代器，用于跨多个SST文件进行有序遍历。
+ * 合并后的堆迭代器会自动按照键的顺序维护所有SST迭代器中的键值对。
+ *
+ * @param iter_vec 包含多个SST迭代器的向量，每个迭代器指向一个SST文件的数据
+ * @param tranc_id 事务ID，用于标识当前操作所属的事务
+ *
+ * @return std::pair<HeapIterator, HeapIterator> 返回一个迭代器对，其中：
+ *         - first: 指向合并后数据起始位置的堆迭代器
+ *         - second: 堆迭代器的结束标记（空迭代器）
+ *
+ * @note 如果输入的迭代器向量为空，则返回一对空的堆迭代器
+ * @note 合并过程中会遍历所有SST迭代器的所有有效键值对
+ * @note
+ * 使用SST文件的ID（取负值）作为比较的次要条件，确保相同键时ID较小的文件优先级更高
+ * @note 当前实现中level参数暂时没有实际作用，所有比较都在同一层级进行
+ */
 std::pair<HeapIterator, HeapIterator>
 SstIterator::merge_sst_iterator(std::vector<SstIterator> iter_vec,
                                 uint64_t tranc_id) {

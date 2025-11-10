@@ -6,6 +6,8 @@
 #include "../../include/sst/concact_iterator.h"
 #include "../../include/sst/sst.h"
 #include "../../include/sst/sst_iterator.h"
+#include "iterator/iterator.h"
+#include "lsm/two_merge_iterator.h"
 #include "spdlog/spdlog.h"
 #include <algorithm>
 #include <bits/stdint-uintn.h>
@@ -263,6 +265,12 @@ void LSMEngine::clear() {
  */
 uint64_t LSMEngine::flush() {
   // TODO: Lab 4.1 刷盘形成sst文件
+  if (level_sst_ids.find(0) != level_sst_ids.end() &&
+      level_sst_ids[0].size() >=
+          TomlConfig::getInstance().getLsmSstLevelRatio()) {
+    full_compact(0);
+  }
+
   size_t new_sst_id = next_sst_id++;
 
   SSTBuilder sst_builder(TomlConfig::getInstance().getLsmBlockSize(), false);
@@ -300,32 +308,203 @@ Level_Iterator LSMEngine::end() {
   throw std::runtime_error("Not implemented");
 }
 
+/**
+ * @brief 执行全量压缩操作，将指定层级的SST文件合并到下一层级
+ *
+ * 该函数负责LSM树的全量压缩过程，将源层级的所有SST文件与目标层级的SST文件进行合并，
+ * 生成新的SST文件并更新层级结构。如果目标层级文件数量超过阈值，会递归触发更深层级的压缩。
+ *
+ * @param src_level 源层级编号，该层级的所有SST文件将被压缩到下一层级
+ *
+ * @note
+ * 如果src_level为0，由于L0层的SST文件键范围可能存在重叠，会使用特殊的L0到L1压缩逻辑
+ * @note 压缩过程中会删除旧的SST文件，并添加新生成的SST文件到目标层级
+ * @note 函数会更新当前最大层级记录，确保层级信息的准确性
+ * @note 压缩完成后，目标层级的SST文件ID列表会按升序排序
+ *
+ * @warning 该操作会修改LSM树的层级结构，调用前需要确保没有其他并发操作
+ *
+ * 处理流程：
+ * 1. 检查下一层级是否需要递归压缩
+ * 2. 记录源层级和目标层级的当前SST文件ID
+ * 3. 根据源层级选择不同的压缩策略（L0特殊处理或普通层级处理）
+ * 4. 删除旧的SST文件记录和物理文件
+ * 5. 更新层级信息并添加新生成的SST文件
+ */
 void LSMEngine::full_compact(size_t src_level) {
   // TODO: Lab 4.5 负责完成整个 full compact
   // ? 你可能需要控制`Compact`流程需要递归地进行
+
+  // 判断是否需要继续递归
+  if (level_sst_ids[src_level].size() >
+      TomlConfig::getInstance().getLsmSstLevelRatio()) {
+    full_compact(src_level + 1);
+  }
+
+  // 将源层级的所有SST文件与目标层级的SST文件进行合并, 并生成新的SST文件
+  spdlog::debug("LSMEngine--"
+                "Compaction: Starting full compaction from level{} to level{}",
+                src_level, src_level + 1);
+  std::vector<std::shared_ptr<SST>> new_ssts;
+  if (src_level == 0) {
+    std::vector<size_t> l0_ids(this->level_sst_ids[0].begin(),
+                               this->level_sst_ids[0].end());
+    std::vector<size_t> l1_ids(this->level_sst_ids[1].begin(),
+                               this->level_sst_ids[1].end());
+    new_ssts = full_l0_l1_compact(l0_ids, l1_ids);
+  } else {
+    std::vector<size_t> lx_ids(this->level_sst_ids[src_level].begin(),
+                               this->level_sst_ids[src_level].end());
+    std::vector<size_t> ly_ids(this->level_sst_ids[src_level + 1].begin(),
+                               this->level_sst_ids[src_level + 1].end());
+    new_ssts = full_common_compact(lx_ids, ly_ids, src_level + 1);
+  }
+
+  // 完成 compact 后移除旧的sst记录(包括源层级和目标层级)
+  auto sst_ids = this->level_sst_ids[src_level];
+  for (auto sst_id : sst_ids) {
+    auto sst = this->ssts[sst_id];
+    sst->del_sst();
+    this->ssts.erase(sst_id);
+  }
+  sst_ids = this->level_sst_ids[src_level + 1];
+  for (auto sst_id : sst_ids) {
+    auto sst = this->ssts[sst_id];
+    sst->del_sst();
+    this->ssts.erase(sst_id);
+  }
+  //
+  std::deque<size_t>().swap(level_sst_ids[src_level]);
+  std::deque<size_t>().swap(level_sst_ids[src_level + 1]);
+
+  // 添加新的sst到对应的层级记录(src_level+1)
+  for (auto new_sst : new_ssts) {
+    auto new_sst_id = new_sst->get_sst_id();
+    this->level_sst_ids[src_level + 1].push_back(new_sst_id);
+    this->ssts[new_sst_id] = new_sst;
+  }
+  spdlog::debug("LSMEngine--"
+                "Compaction: Finished compaction. New SSTs added at level{}",
+                src_level + 1);
 }
 
 std::vector<std::shared_ptr<SST>>
 LSMEngine::full_l0_l1_compact(std::vector<size_t> &l0_ids,
                               std::vector<size_t> &l1_ids) {
   // TODO: Lab 4.5 负责完成 l0 和 l1 的 full compact
-  return {};
+  std::vector<std::shared_ptr<SST>> l0_ids_ssts;
+  std::vector<std::shared_ptr<SST>> l1_ids_ssts;
+  std::vector<SstIterator> l0_iters;
+  //
+  for (auto id : l0_ids) {
+    l0_ids_ssts.push_back(this->ssts[id]);
+    l0_iters.push_back(this->ssts[id]->begin(0));
+  }
+  for (auto id : l1_ids) {
+    l1_ids_ssts.push_back(this->ssts[id]);
+  }
+  auto [l0_begin, l0_end] = SstIterator::merge_sst_iterator(l0_iters, 0);
+  auto l1_iter = std::make_shared<ConcactIterator>(l1_ids_ssts, 0);
+  auto l0_iter = std::make_shared<HeapIterator>(l0_begin);
+  TwoMergeIterator merger_iter(l0_iter, l1_iter, 0);
+  return gen_sst_from_iter(merger_iter, LSMEngine::get_sst_size(0), 1);
 }
 
+/**
+ * @brief 执行完整的通用压缩操作
+ *
+ * 该函数执行跨层级的SST文件压缩合并操作，将源层级（lx）和目标层级（ly）的
+ * 指定SST文件进行归并排序，生成新的SST文件到目标层级。
+ *
+ * @param lx_ids 源层级（lx）要参与压缩的SST文件ID列表
+ * @param ly_ids 目标层级（ly）要参与压缩的SST文件ID列表
+ * @param level_y 目标层级编号
+ * @return std::vector<std::shared_ptr<SST>> 压缩后生成的新SST文件列表
+ *
+ * @note 使用连接迭代器（ConcactIterator）将同层级的多个SST文件连接
+ * @note 使用双路归并迭代器（TwoMergeIterator）对两个层级的文件进行归并排序
+ * @note 如果目标层级是底层（没有下一级），可以清理删除标记以节省空间
+ * @note 需要补全已完成事务的过滤逻辑
+ *
+ * @see ConcactIterator
+ * @see TwoMergeIterator
+ * @see LSMEngine::gen_sst_from_iter()
+ * @see LSMEngine::get_sst_size()
+ */
 std::vector<std::shared_ptr<SST>>
 LSMEngine::full_common_compact(std::vector<size_t> &lx_ids,
                                std::vector<size_t> &ly_ids, size_t level_y) {
   // TODO: Lab 4.5 负责完成其他相邻 level 的 full compact
+  std::vector<std::shared_ptr<SST>> lx_iters;
+  std::vector<std::shared_ptr<SST>> ly_iters;
 
-  return {};
+  for (auto id : lx_ids) {
+    lx_iters.push_back(ssts[id]);
+  }
+  for (auto id : ly_ids) {
+    ly_iters.push_back(ssts[id]);
+  }
+  std::shared_ptr<ConcactIterator> old_lx_begin_ptr =
+      std::make_shared<ConcactIterator>(lx_iters, 0);
+
+  std::shared_ptr<ConcactIterator> old_ly_begin_ptr =
+      std::make_shared<ConcactIterator>(ly_iters, 0);
+  TwoMergeIterator lx_ly_begin(old_lx_begin_ptr, old_ly_begin_ptr, 0);
+  // TODO:如果目标 level 的下一级 level+1 不存在, 则为底层的level,
+  // 可以清理掉删除标记
+  return gen_sst_from_iter(lx_ly_begin, LSMEngine::get_sst_size(level_y),
+                           level_y);
 }
 
+/**
+ * @brief 从迭代器生成SST文件
+ *
+ * 该函数从给定的迭代器中读取键值对数据，按照目标SST文件大小分批构建SST文件。
+ * 当累积的数据量达到目标大小时，会生成一个新的SST文件并重置构建器。
+ *
+ * @param iter 输入迭代器，提供键值对数据源
+ * @param target_sst_size 目标SST文件大小阈值
+ * @param target_level 生成的SST文件所属的层级
+ * @return std::vector<std::shared_ptr<SST>> 生成的新SST文件列表
+ *
+ * @note 迭代器遍历过程中会持续添加数据到SST构建器
+ * @note 当累积数据达到目标大小时会立即生成一个SST文件
+ * @note 迭代器遍历完成后，如果构建器中还有剩余数据，会生成最后一个SST文件
+ * @note 需要补全已完成事务的删除逻辑
+ * @note 每个生成的SST文件都有唯一的SST ID和对应的文件路径
+ *
+ * @see SSTBuilder::add()
+ * @see SSTBuilder::build()
+ * @see LSMEngine::get_sst_path()
+ */
 std::vector<std::shared_ptr<SST>>
 LSMEngine::gen_sst_from_iter(BaseIterator &iter, size_t target_sst_size,
                              size_t target_level) {
   // TODO: Lab 4.5 实现从迭代器构造新的 SST
+  std::vector<std::shared_ptr<SST>> new_ssts;
+  auto sst_builder =
+      SSTBuilder(TomlConfig::getInstance().getLsmBlockSize(), false);
+  //
+  while (!iter.is_end()) {
+    sst_builder.add((*iter).first, (*iter).second, iter.get_tranc_id());
+    if (sst_builder.estimated_size() > target_sst_size) {
+      size_t sst_id = next_sst_id++;
+      const auto &path = get_sst_path(sst_id, target_level);
+      auto new_sst = sst_builder.build(sst_id, path, this->block_cache);
+      //
+      this->level_sst_ids[target_level].push_front(sst_id);
+      this->ssts[sst_id] = new_sst;
+      new_ssts.push_back(new_sst);
+    }
+    ++iter;
+  }
+  //
+  if (new_ssts.empty()) {
+    spdlog::error("LSMEngine--"
+                  "Compaction: No new sst file has been created");
+  }
 
-  return {};
+  return new_ssts;
 }
 
 size_t LSMEngine::get_sst_size(size_t level) {

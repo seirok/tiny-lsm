@@ -6,6 +6,26 @@ namespace tiny_lsm {
 
 TwoMergeIterator::TwoMergeIterator() {}
 
+/**
+ * @brief 双路归并迭代器构造函数
+ *
+ * 该构造函数初始化双路归并迭代器，对两个输入迭代器进行预处理：
+ * 1. 跳过不可见的事务（基于最大事务ID）
+ * 2. 跳过迭代器B中与迭代器A重复的键
+ * 3. 确定当前应该使用哪个迭代器的数据
+ *
+ * @param it_a 第一个输入迭代器的共享指针
+ * @param it_b 第二个输入迭代器的共享指针
+ * @param max_tranc_id 最大事务ID，用于过滤不可见的事务
+ *
+ * @note 使用移动语义接管迭代器所有权，避免不必要的拷贝
+ * @note 初始化过程中会进行事务可见性过滤和重复键处理
+ * @note 最终通过choose_it_a()确定当前活跃的迭代器
+ *
+ * @see TwoMergeIterator::skip_by_tranc_id()
+ * @see TwoMergeIterator::skip_it_b()
+ * @see TwoMergeIterator::choose_it_a()
+ */
 TwoMergeIterator::TwoMergeIterator(std::shared_ptr<BaseIterator> it_a,
                                    std::shared_ptr<BaseIterator> it_b,
                                    uint64_t max_tranc_id)
