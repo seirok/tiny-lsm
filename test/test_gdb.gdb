@@ -1,25 +1,8 @@
-b test_lsm.cpp:80 
+# source ~/tiny-lsm/test/test_gdb.gdb
+b test_lsm.cpp:77 if i==2
 commands
-    p i
+    b engine.cpp:117 if sst_id==2
     continue
 end
 
-
-
-
-b test_lsm.cpp:80 if i==1
-commands
-    p i
-    b sst.cpp:124
-    commands
-        b sst_iterator.cpp:138
-        commands
-            b block_iterator.cpp:41
-            continue
-        end
-        continue
-    end
-    continue
-end
-
-
+run

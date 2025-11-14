@@ -265,11 +265,11 @@ void LSMEngine::clear() {
  */
 uint64_t LSMEngine::flush() {
   // TODO: Lab 4.1 刷盘形成sst文件
-  if (level_sst_ids.find(0) != level_sst_ids.end() &&
-      level_sst_ids[0].size() >=
-          TomlConfig::getInstance().getLsmSstLevelRatio()) {
-    full_compact(0);
-  }
+  // if (level_sst_ids.find(0) != level_sst_ids.end() &&
+  //     level_sst_ids[0].size() >=
+  //         TomlConfig::getInstance().getLsmSstLevelRatio()) {
+  //   full_compact(0);
+  // }
 
   size_t new_sst_id = next_sst_id++;
 

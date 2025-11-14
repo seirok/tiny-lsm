@@ -53,7 +53,7 @@ TEST_F(LSMTest, BasicOperations) {
 // Test persistence across restarts
 TEST_F(LSMTest, Persistence) {
   std::unordered_map<std::string, std::string> kvs;
-  int num = 100;
+  int num = 5000;
   {
     LSM lsm(test_dir);
     for (int i = 0; i < num; ++i) {
@@ -80,7 +80,7 @@ TEST_F(LSMTest, Persistence) {
     } else {
       if (key == "key4410") {
         // debug
-        auto res = lsm.get("key4410");
+        //    auto res = lsm.get("key4410");
       }
       if (lsm.get(key, true).has_value()) {
         std::cout << "key" << i << " not exist but found" << std::endl;

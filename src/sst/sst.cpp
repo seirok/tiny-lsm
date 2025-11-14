@@ -141,7 +141,7 @@ size_t SST::get_sst_id() const { return sst_id; }
 
 SstIterator SST::begin(uint64_t tranc_id) {
   // TODO: Lab 3.6 返回起始位置迭代器
-  throw std::runtime_error("Not implemented");
+  return SstIterator(shared_from_this(), tranc_id);
 }
 
 SstIterator SST::end() {
