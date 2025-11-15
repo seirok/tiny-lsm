@@ -141,10 +141,14 @@ void SstIterator::seek(const std::string &key) {
     m_block_idx = m_sst->num_blocks();
     return;
   }
-
+  // 这里的idx并不代表真正找到了，只能说明待查询键存在于某个block的范围里
+  // 至于block是否真正包含该键，还要进一步验证
   m_block_idx = idx;
   auto block = m_sst->read_block(m_block_idx);
   m_block_it = std::make_shared<BlockIterator>(block, key, this->max_tranc_id_);
+  if (m_block_it->is_end()) {
+    m_block_it = nullptr;
+  }
 }
 
 std::string SstIterator::key() {
@@ -187,16 +191,22 @@ bool SstIterator::operator==(const BaseIterator &other) const {
   if (other.get_type() != IteratorType::SstIterator) {
     return false;
   }
-  auto other2 = dynamic_cast<const SstIterator &>(other);
-  if (m_sst != other2.m_sst || m_block_idx != other2.m_block_idx) {
-    return false;
-  }
 
+  auto other2 = dynamic_cast<const SstIterator &>(other);
+
+  // 空的sst_iterator 的m_block_it成员是nullptr
+  // 两者均为空
   if (!m_block_it && !other2.m_block_it) {
     return true;
   }
 
+  // 其中一个为空
   if (!m_block_it || !other2.m_block_it) {
+    return false;
+  }
+
+  // 均不为空
+  if (m_sst != other2.m_sst || m_block_idx != other2.m_block_idx) {
     return false;
   }
 

@@ -126,7 +126,9 @@ SstIterator SST::get(const std::string &key, uint64_t tranc_id) {
   if (key < this->first_key || key > this->last_key) {
     return this->end();
   }
-  return SstIterator(shared_from_this(), key, tranc_id);
+  // 即使key在范围里，也有可能没有查询到
+  sst_it = SstIterator(shared_from_this(), key, tranc_id);
+  return sst_it;
 }
 
 size_t SST::num_blocks() const { return meta_entries.size(); }
@@ -178,7 +180,7 @@ void SSTBuilder::add(const std::string &key, const std::string &value,
   // 本身是管理若干键值对的容器，而键值对则来源于下一层的Memtable
   // !!! 以下代码正确的前提是SST是通过有序遍历Memtable得到的
 
-  if (!this->block.size()) { // block的offsets数组为空
+  if (this->block.size() == 0) { // block的offsets数组为空
     this->first_key = key;
   }
   if (this->block.add_entry(key, value, tranc_id, true)) {
